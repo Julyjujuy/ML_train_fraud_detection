@@ -1,38 +1,54 @@
-import numpy as np
 import pandas as pd
-from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import train_test_split
+from imblearn.under_sampling import RandomUnderSampler
+from xgboost import XGBClassifier
+from joblib import dump
+
+from src.data_ingest import load_dataframe
+from src.features import basic_clean_cc, basic_clean_ps
 
 
-def basic_clean_cc(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Basic cleaning for the Credit Card dataset:
-    - Scales the 'Amount' column to zero mean and unit variance.
-    - Drops the original 'Amount'.
-    """
-    df = df.copy()
-    scaler = StandardScaler()
-    # Fit-transform expects a 2D array
-    df["ScaledAmount"] = scaler.fit_transform(df[["Amount"]])
-    df.drop("Amount", axis=1, inplace=True)
-    return df
+def main():
+    # --- CreditCard Dataset Pipeline ---
+    # 1. Load raw data
+    df_cc = load_dataframe("creditcard.csv")
+    # 2. Clean and feature-engineer
+    df_cc = basic_clean_cc(df_cc)
+
+    # 3. Split into features/labels
+    X = df_cc.drop("Class", axis=1)
+    y = df_cc["Class"]
+
+    # 4. Train/test split
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, stratify=y, random_state=42
+    )
+
+    # 5. Handle class imbalance via under-sampling
+    rus = RandomUnderSampler(sampling_strategy=0.5, random_state=42)
+    X_res, y_res = rus.fit_resample(X_train, y_train)
+
+    # 6. Train the model
+    model = XGBClassifier(
+        objective="binary:logistic",
+        eval_metric="aucpr",
+        use_label_encoder=False,
+        n_estimators=100,
+    )
+    model.fit(X_res, y_res)
+
+    # 7. Save the model
+    dump(model, "models/creditcard_xgb.joblib")
+    print("Saved CreditCard model to models/creditcard_xgb.joblib")
+
+    # --- PaySim Dataset Pipeline (optional) ---
+    # To train on PaySim you can uncomment and adapt below:
+    # df_ps = load_dataframe("PaySim_Synthetic_Mobile-Money-Simulator_dataset.csv")
+    # df_ps = basic_clean_ps(df_ps)
+    # X_ps = df_ps.drop(["isFraud","isFlaggedFraud"], axis=1)
+    # y_ps = df_ps["isFraud"]
+    # # ... repeat split, resample, train steps ...
 
 
-def basic_clean_ps(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Basic cleaning for the PaySim dataset:
-    - One-hot encodes the 'type' categorical feature.
-    - Log-transforms highly skewed monetary and balance fields.
-    - Drops the original raw columns after transformation.
-    """
-    df = df.copy()
-    # One-hot encode transaction type, dropping the first level to avoid collinearity
-    df = pd.get_dummies(df, columns=["type"], drop_first=True)
-
-    # Log-transform skewed monetary and balance fields
-    monetary_cols = ["amount", "oldbalanceOrg", "newbalanceOrig", "oldbalanceDest", "newbalanceDest"]
-    for col in monetary_cols:
-        df[f"log_{col}"] = np.log1p(df[col])  # add 1 to avoid log(0)
-
-    # Drop raw columns
-    df.drop(monetary_cols, axis=1, inplace=True)
-    return df
+if __name__ == "__main__":
+    main()
